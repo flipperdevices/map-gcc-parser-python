@@ -1,38 +1,63 @@
-import os
-import re
 import sys
+import re
+import os
 from typing import TextIO
 
 from cxxfilt import demangle
 
 
 class Objectfile:
-    def __init__(self, section, offset, size, comment):
+
+    def __init__(self, section: str, offset: int, size: int, comment: str):
         self.section = section.strip()
         self.offset = offset
         self.size = size
         self.path = (None, None)
         self.basepath = None
+
         if comment:
             self.path = re.match(r'^(.+?)(?:\(([^\)]+)\))?$', comment).groups()
             self.basepath = os.path.basename(self.path[0])
+
         self.children = []
 
-    def __repr__(self):
-        return '<Objectfile {} {:x} {:x} {} {}>'.format(self.section, self.offset, self.size, self.path,
-                                                        repr(self.children))
+    def __repr__(self) -> str:
+        return f'<Objectfile {self.section} {self.offset:x} {self.size:x} {self.path} {repr(self.children)}>'
 
 
-def parseSections(fd):
+def update_children_size(children: list[list], subsection_size: int) -> list:
+    # set subsection size to an only child
+    if len(children) == 1:
+        children[0][1] = subsection_size
+        return children
+
+    rest_size = subsection_size
+
+    for index in range(1, len(children)):
+        if rest_size > 0:
+            # current size = current address - previous child address
+            child_size = children[index][0] - children[index - 1][0]
+            rest_size -= child_size
+            children[index - 1][1] = child_size
+
+    # if there is rest size, set it to the last child element
+    if rest_size > 0:
+        children[-1][1] = rest_size
+
+    return children
+
+
+def parse_sections(file_name: str) -> list:
     """
     Quick&Dirty parsing for GNU ld’s linker map output, needs LANG=C, because
     some messages are localized.
     """
 
     sections = []
-    with open(fd, 'r') as file:
+    with open(file_name, 'r') as file:
         # skip until memory map is found
         found = False
+
         while True:
             l = file.readline()
             if not l:
@@ -40,8 +65,9 @@ def parseSections(fd):
             if l.strip() == 'Memory Configuration':
                 found = True
                 break
+
         if not found:
-            return None
+            raise Exception(f'Memory configuration is not found in the{input_file}')
 
         # long section names result in a linebreak afterwards
         sectionre = re.compile(
@@ -50,6 +76,7 @@ def parseSections(fd):
         subsectionre = re.compile('[ ]{16}0x(?P<offset>[0-9a-f]+)[ ]+(?P<function>.+)\n+', re.I)
         s = file.read()
         pos = 0
+
         while True:
             m = sectionre.match(s, pos)
             if not m:
@@ -60,6 +87,7 @@ def parseSections(fd):
                     continue
                 except ValueError:
                     break
+
             pos = m.end()
             section = m.group('section')
             v = m.group('offset')
@@ -67,13 +95,14 @@ def parseSections(fd):
             v = m.group('size')
             size = int(v, 16) if v is not None else None
             comment = m.group('comment')
+
             if section != '*default*' and size > 0:
                 of = Objectfile(section, offset, size, comment)
+
                 if section.startswith(' '):
-                    index = -1
-                    last_same_address_item_index = -1
                     children = []
                     sections[-1].children.append(of)
+
                     while True:
                         m = subsectionre.match(s, pos)
                         if not m:
@@ -82,13 +111,13 @@ def parseSections(fd):
                         offset, function = m.groups()
                         offset = int(offset, 16)
                         if sections and sections[-1].children:
-                            index += 1
-                            if offset == of.offset:
-                                last_same_address_item_index = index
                             children.append([offset, 0, function])
+
                     if children:
-                        children[last_same_address_item_index][1] = of.size
+                        children = update_children_size(children=children, subsection_size=of.size)
+
                     sections[-1].children[-1].children.extend(children)
+
                 else:
                     sections.append(of)
 
@@ -96,10 +125,9 @@ def parseSections(fd):
 
 
 def get_subsection_name(section_name: str, subsection: Objectfile) -> str:
+    subsection_split_names = subsection.section.split('.')
     if subsection.section.startswith('.'):
-        subsection_split_names = subsection.section[1:].split('.')
-    else:
-        subsection_split_names = subsection.section.split('.')
+        subsection_split_names = subsection_split_names[1:]
 
     return f'.{subsection_split_names[1]}' if len(subsection_split_names) > 2 else section_name
 
@@ -175,12 +203,23 @@ def save_section(section: Objectfile, write_file_object: TextIO) -> None:
         save_subsection(section_name=section_name, subsection=subsection, write_file_object=write_file_object)
 
 
-def save_parse_data(parse_data: list[Objectfile], output_file_name: str) -> None:
+def save_parsed_data(parsed_data: list[Objectfile], output_file_name: str) -> None:
     with open(output_file_name, 'w') as write_file_object:
-        for section in parse_data:
+        for section in parsed_data:
             if section.children:
                 save_section(section=section, write_file_object=write_file_object)
 
 
 if __name__ == '__main__':
-    save_parse_data(parseSections(sys.argv[1]), sys.argv[2])
+    if len(sys.argv) < 3:
+        raise Exception(f'Usage: {sys.argv[0]} <input file> <output file>')
+
+    input_file = sys.argv[1]
+    output_file = sys.argv[2]
+
+    parsed_sections = parse_sections(input_file)
+
+    if parsed_sections is None:
+        raise Exception(f'Memory configuration is not  {input_file}')
+
+    save_parsed_data(parsed_sections, output_file)
