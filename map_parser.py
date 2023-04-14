@@ -59,10 +59,10 @@ def parse_sections(file_name: str) -> list:
         found = False
 
         while True:
-            l = file.readline()
-            if not l:
+            line = file.readline()
+            if not line:
                 break
-            if l.strip() == 'Memory Configuration':
+            if line.strip() == 'Memory Configuration':
                 found = True
                 break
 
@@ -170,10 +170,14 @@ def save_subsection(section_name: str, subsection: Objectfile, write_file_object
         demangled_name = demangle(mangled_name) if mangled_name else mangled_name
 
         write_subsection(
-            section_name=section_name, subsection_name=subsection_name,
-            address=address, size=size,
-            demangled_name=demangled_name, module_name=module_name,
-            file_name=file_name, mangled_name=mangled_name,
+            section_name=section_name,
+            subsection_name=subsection_name,
+            address=address,
+            size=size,
+            demangled_name=demangled_name,
+            module_name=module_name,
+            file_name=file_name,
+            mangled_name=mangled_name,
             write_file_object=write_file_object
         )
         return
